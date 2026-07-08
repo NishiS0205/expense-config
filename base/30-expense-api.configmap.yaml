@@ -1,0 +1,25 @@
+# manifests/30-expense-api.configmap.yaml - non-secret env.
+# Plain key/value pairs. Hostnames are the in-cluster DNS names
+# (<svc>.<namespace>.svc.cluster.local) and resolve to the matching
+# Services. Anything sensitive (passwords, API keys) belongs in the
+# Secret, never here.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: expense-api-config
+  namespace: expense-dev
+  labels:
+    app.kubernetes.io/name: expense-api
+data:
+  SPRING_PROFILES_ACTIVE:         k8s
+  LOGGING_LEVEL_ROOT:             INFO
+  SERVER_PORT:                    "8080"
+  SPRING_DATASOURCE_URL:          jdbc:postgresql://postgres.expense-dev.svc.cluster.local:5432/expense_dev
+  SPRING_DATASOURCE_USERNAME:     expense_dev
+  SPRING_DATA_MONGODB_URI:        mongodb://mongo.expense-dev.svc.cluster.local:27017/expense
+  SPRING_DATA_REDIS_HOST:         redis.expense-dev.svc.cluster.local
+  SPRING_DATA_REDIS_PORT:         "6379"
+  SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka.expense-dev.svc.cluster.local:9092
+  OTEL_EXPORTER_OTLP_ENDPOINT:    http://otelcol.expense-dev.svc.cluster.local:4317
+  OTEL_SERVICE_NAME:              expense-api
+  SPRING_KAFKA_LISTENER_AUTO_STARTUP: "false"

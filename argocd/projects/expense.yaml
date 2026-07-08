@@ -1,0 +1,15 @@
+# argocd/projects/expense.yaml
+# Task 1: minimal scoping. Task 2 tightens RBAC, resource
+# whitelists, and destinations further.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: expense
+  namespace: argocd
+spec:
+  description: expense-api GitOps project
+  sourceRepos:
+    - https://github.com/NishiS0205/expense-config.git
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: expense-dev

@@ -1,0 +1,27 @@
+# manifests/60-expense-api.ingress.yaml - external reach.
+# k3d ships NGINX as its default ingress controller; the cluster was
+# created with --port "8080:80@loadbalancer", so a curl to
+# localhost:8080 with the matching Host header reaches this Ingress.
+# Use `ingressClassName` (NOT the deprecated annotation form).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: expense-api
+  namespace: expense-dev
+  labels:
+    app.kubernetes.io/name: expense-api
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size:    "1m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "30"
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: expense.dev.uptimecrew.internal
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: expense-api
+            port: { number: 8080 }

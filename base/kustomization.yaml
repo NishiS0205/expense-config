@@ -1,0 +1,14 @@
+# base/kustomization.yaml
+# The unchanged W5 D3 manifests, copied verbatim from expense-project.
+# Kept identical across envs; per-env differences live in overlays/.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind:       Kustomization
+
+resources:
+  - 00-namespace.yaml
+  - 10-expense-api.deployment.yaml
+  - 20-expense-api.service.yaml
+  - 30-expense-api.configmap.yaml
+  - 40-expense-api.secret.yaml
+  - 50-expense-api.hpa.yaml
+  - 60-expense-api.ingress.yaml

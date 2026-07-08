@@ -1,0 +1,20 @@
+# manifests/20-expense-api.service.yaml - stable in-cluster name.
+# ClusterIP only; external traffic comes through the Ingress (Topic 4).
+# Selector MUST match the Deployment's pod labels.
+apiVersion: v1
+kind: Service
+metadata:
+  name: expense-api
+  namespace: expense-dev
+  labels:
+    app.kubernetes.io/name:      expense-api
+    app.kubernetes.io/component: api
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: expense-api
+  ports:
+  - name:       http
+    port:       8080
+    targetPort: http              # the *named* container port, not a number
+    protocol:   TCP
