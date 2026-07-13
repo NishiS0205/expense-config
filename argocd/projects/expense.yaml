@@ -61,3 +61,39 @@ spec:
   namespaceResourceBlacklist:
     - {group: "", kind: ResourceQuota}
     - {group: "", kind: LimitRange}
+
+  # Sync windows: deny auto-sync to prod over the weekend.
+  # Manual sync still works (manualSync: true on the allow side),
+  # but the controller will not promote on its own.
+  syncWindows:
+    - kind: deny
+      schedule: "0 17 * * 5"        # Friday 17:00
+      duration: 60h                 # through Monday 05:00
+      applications:
+        - "expense-api-prod"
+      manualSync: true              # human can still force-sync on-call
+
+  # Project-scoped RBAC -- two roles, not "any-developer-is-admin".
+  roles:
+    # Developers: read + sync in dev/staging; cannot touch prod.
+    - name: developers
+      description: Read everything; sync dev and staging only.
+      policies:
+        - p, proj:expense:developers, applications, get,    expense/*,                   allow
+        - p, proj:expense:developers, applications, sync,   expense/expense-api-dev,     allow
+        - p, proj:expense:developers, applications, sync,   expense/expense-api-staging, allow
+        - p, proj:expense:developers, applications, delete, expense/*,                   deny
+        - p, proj:expense:developers, logs,         get,    expense/*,                   allow
+      groups:
+        - uptimecrew:expense-engineers
+    # Releasers: full sync including prod; still cannot override the
+    # project's allow-lists (those live above).
+    - name: releasers
+      description: Full sync including prod. Cannot delete Applications.
+      policies:
+        - p, proj:expense:releasers, applications, get,      expense/*, allow
+        - p, proj:expense:releasers, applications, sync,     expense/*, allow
+        - p, proj:expense:releasers, applications, action/*, expense/*, allow
+        - p, proj:expense:releasers, applications, delete,   expense/*, deny
+      groups:
+        - uptimecrew:expense-engineers-releasers
