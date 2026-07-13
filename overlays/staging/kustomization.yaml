@@ -34,3 +34,12 @@ patches:
         path: /metadata/annotations
         value:
           argocd.argoproj.io/sync-wave: "-1"
+  # Base hardcodes the dev hostname; every overlay needs its own
+  # distinct host or nginx's admission webhook rejects the
+  # duplicate (one host can only route to one Ingress cluster-wide).
+  - target:
+      kind: Ingress
+    patch: |-
+      - op: replace
+        path: /spec/rules/0/host
+        value: expense.staging.uptimecrew.internal
