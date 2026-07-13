@@ -9,7 +9,7 @@ namespace: expense-prod
 
 images:
   - name:    uptimecrew/expense-api
-    newName: uptimecrew/expense-api
+    newName: 475790160484.dkr.ecr.us-east-1.amazonaws.com/uptimecrew/expense-api
     newTag:  0f9e8618f9c844fb6d4337c08146cc5b5358ed09
 
 replicas:
