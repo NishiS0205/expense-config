@@ -1,21 +1,57 @@
 # argocd/projects/expense.yaml
-# Task 1: minimal scoping. Task 2 tightens RBAC, resource
-# whitelists, and destinations further.
+# AppProject scoping the expense capstone team.
+# The platform team owns this file in practice; the app team
+# proposes changes via PR. Every Application in this assignment
+# has spec.project = expense -- never "default".
 apiVersion: argoproj.io/v1alpha1
 kind: AppProject
 metadata:
   name: expense
   namespace: argocd
+  # Finalizer ensures Argo CD prunes generated Applications when
+  # the project itself is deleted -- a defence against orphaned
+  # workloads if the project is ever retired.
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
 spec:
-  description: expense-api GitOps project
+  description: expense-api capstone -- GitOps overlays + observability
+
+  # WHICH repos may an Application in this project use as source?
   sourceRepos:
     - https://github.com/NishiS0205/expense-config.git
+
+  # WHICH (cluster, namespace) pairs are legal?
   destinations:
-    - server: https://kubernetes.default.svc
+    - server:    https://kubernetes.default.svc
       namespace: expense-dev
-  # Namespace itself is cluster-scoped; without this whitelist the
-  # AppProject blocks it even though the Application only ever
-  # touches the one destination namespace above.
-  clusterResourceWhitelist:
-    - group: ""
-      kind:  Namespace
+    - server:    https://kubernetes.default.svc
+      namespace: expense-staging
+    - server:    https://kubernetes.default.svc
+      namespace: expense-prod
+
+  # Cluster-scoped resources: the app team has NO business creating
+  # ClusterRoles, CustomResourceDefinitions, or PersistentVolumes.
+  # Empty whitelist = full deny. Platform team manages those.
+  clusterResourceWhitelist: []
+
+  # Namespace-scoped resources: only the kinds the W5 D3 manifests
+  # actually use.
+  namespaceResourceWhitelist:
+    - {group: "",                       kind: Namespace}
+    - {group: "",                       kind: Service}
+    - {group: "",                       kind: ConfigMap}
+    - {group: "",                       kind: Secret}
+    - {group: "",                       kind: ServiceAccount}
+    - {group: apps,                     kind: Deployment}
+    - {group: autoscaling,              kind: HorizontalPodAutoscaler}
+    - {group: policy,                   kind: PodDisruptionBudget}
+    - {group: networking.k8s.io,        kind: NetworkPolicy}
+    - {group: networking.k8s.io,        kind: Ingress}
+    - {group: monitoring.coreos.com,    kind: ServiceMonitor}
+    - {group: monitoring.coreos.com,    kind: PrometheusRule}
+
+  # Explicitly block quota knobs -- the platform team owns those.
+  # (Applied separately via platform/00-quota.yaml, not through Argo CD.)
+  namespaceResourceBlacklist:
+    - {group: "", kind: ResourceQuota}
+    - {group: "", kind: LimitRange}

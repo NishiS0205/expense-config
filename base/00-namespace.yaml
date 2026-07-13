@@ -1,33 +1,11 @@
-# manifests/00-namespace.yaml - the bounded blast radius for expense-api.
-# A ResourceQuota caps total resource use; a LimitRange supplies defaults
-# so pods that omit requests/limits still get sane numbers.
+# base/00-namespace.yaml - the bounded blast radius for expense-api.
+# ResourceQuota + LimitRange live separately in platform/00-quota.yaml,
+# applied directly by the platform team (not synced by Argo CD -- the
+# expense AppProject explicitly blacklists those two kinds so the app
+# team's config repo cannot silently change its own resource ceiling).
 apiVersion: v1
 kind: Namespace
 metadata:
   name: expense-dev
   labels:
     app.kubernetes.io/part-of: expense
----
-apiVersion: v1
-kind: ResourceQuota
-metadata:
-  name: expense-dev-quota
-  namespace: expense-dev
-spec:
-  hard:
-    requests.cpu:    "4"
-    requests.memory: 8Gi
-    limits.cpu:      "8"
-    limits.memory:   16Gi
-    pods:            "20"
----
-apiVersion: v1
-kind: LimitRange
-metadata:
-  name: expense-dev-defaults
-  namespace: expense-dev
-spec:
-  limits:
-  - type: Container
-    default:        { cpu: 500m, memory: 768Mi }   # if the pod omits limits
-    defaultRequest: { cpu: 100m, memory: 256Mi }   # if the pod omits requests
