@@ -1,11 +1,11 @@
-# overlays/dev/kustomization.yaml
+# overlays/prod/kustomization.yaml
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind:       Kustomization
 
 resources:
   - ../../base
 
-namespace: expense-dev
+namespace: expense-prod
 
 images:
   - name:    uptimecrew/expense-api
@@ -14,7 +14,7 @@ images:
 
 replicas:
   - name:  expense-api
-    count: 1
+    count: 3
 
 patches:
   - target:
@@ -23,14 +23,10 @@ patches:
     patch: |-
       - op: replace
         path: /data/SPRING_PROFILES_ACTIVE
-        value: dev
+        value: prod
       - op: replace
         path: /data/LOG_LEVEL
-        value: DEBUG
-  # Namespace must land before Deployment/Service on a brand-new
-  # cluster; sync-wave -1 puts it in its own earlier wave. This is
-  # scoped to just the Namespace kind, not a blanket commonAnnotations
-  # override on every resource in the overlay.
+        value: WARN
   - target:
       kind: Namespace
     patch: |-

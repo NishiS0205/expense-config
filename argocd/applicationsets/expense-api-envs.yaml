@@ -1,0 +1,88 @@
+# argocd/applicationsets/expense-api-envs.yaml
+# Templates one Application per env. The list generator drives
+# (env, overlay, namespace) tuples; the inner clusters generator
+# scopes the fleet to the registered local k3d cluster. Adding a
+# new env (e.g. canary) is a one-line entry in the elements list.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: expense-api-envs
+  namespace: argocd
+spec:
+  # If an env falls out of the matrix, KEEP the existing
+  # Application + workload running. A human re-reviews before any
+  # teardown. The default (delete) is the wrong default for prod.
+  syncPolicy:
+    preserveResourcesOnDeletion: true
+
+  generators:
+    - matrix:
+        generators:
+          # Inner generator A: explicit env list.
+          - list:
+              elements:
+                - env: dev
+                  overlay: overlays/dev
+                  namespace: expense-dev
+                  wave: "0"
+                - env: staging
+                  overlay: overlays/staging
+                  namespace: expense-staging
+                  wave: "1"
+                - env: prod
+                  overlay: overlays/prod
+                  namespace: expense-prod
+                  wave: "2"
+          # Inner generator B: every cluster tagged tier=workload.
+          # For the local k3d cluster, the platform team labels the
+          # registered cluster Secret with this label at install time.
+          - clusters:
+              selector:
+                matchLabels:
+                  uptimecrew.example.internal/tier: workload
+
+  template:
+    metadata:
+      # Application names MUST be unique; compose from the params.
+      name: expense-api-{{env}}
+      namespace: argocd
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
+      annotations:
+        # Sync-wave on the generated Application orders the
+        # cross-env promotion: dev syncs first, staging second,
+        # prod third. Within a single Application, sync-wave
+        # annotations on individual resources (Namespace before
+        # Deployment) live in the Kustomize overlay.
+        argocd.argoproj.io/sync-wave: "{{wave}}"
+      labels:
+        env:  "{{env}}"
+        team: expense
+    spec:
+      project: expense
+      source:
+        repoURL:        https://github.com/NishiS0205/expense-config.git
+        path:           "{{overlay}}"
+        targetRevision: main
+      destination:
+        server:    "{{server}}"
+        namespace: "{{namespace}}"
+      syncPolicy:
+        automated:
+          prune:    true
+          selfHeal: true
+          # PROD-ONLY EXCEPTION (left as a comment for the engineer
+          # to make a deliberate call): if the cohort decides prod
+          # should require manual sync, drop the automated stanza
+          # for env: prod via templatePatch. See GITOPS.md.
+        syncOptions:
+          - CreateNamespace=true
+          - ServerSideApply=true
+          - PrunePropagationPolicy=foreground
+          - PruneLast=true
+        retry:
+          limit: 5
+          backoff:
+            duration:    10s
+            factor:      2
+            maxDuration: 3m
