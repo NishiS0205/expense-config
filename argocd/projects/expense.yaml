@@ -31,13 +31,19 @@ spec:
 
   # Cluster-scoped resources: the app team has NO business creating
   # ClusterRoles, CustomResourceDefinitions, or PersistentVolumes.
-  # Empty whitelist = full deny. Platform team manages those.
-  clusterResourceWhitelist: []
+  # NOTE: despite the curriculum reference listing Namespace under
+  # namespaceResourceWhitelist, Argo CD v3.3.12 rejects it there --
+  # Namespace is cluster-scoped per `kubectl api-resources`, and
+  # Argo CD's project validation checks scope against the K8s API,
+  # not against which list a doc happens to put it in. Verified by
+  # direct testing: namespaceResourceWhitelist placement reproduces
+  # the exact same "not permitted" rejection every time.
+  clusterResourceWhitelist:
+    - {group: "", kind: Namespace}
 
   # Namespace-scoped resources: only the kinds the W5 D3 manifests
   # actually use.
   namespaceResourceWhitelist:
-    - {group: "",                       kind: Namespace}
     - {group: "",                       kind: Service}
     - {group: "",                       kind: ConfigMap}
     - {group: "",                       kind: Secret}
