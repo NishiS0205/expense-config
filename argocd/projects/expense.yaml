@@ -13,3 +13,9 @@ spec:
   destinations:
     - server: https://kubernetes.default.svc
       namespace: expense-dev
+  # Namespace itself is cluster-scoped; without this whitelist the
+  # AppProject blocks it even though the Application only ever
+  # touches the one destination namespace above.
+  clusterResourceWhitelist:
+    - group: ""
+      kind:  Namespace
