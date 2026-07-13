@@ -38,4 +38,3 @@ patches:
         path: /metadata/annotations
         value:
           argocd.argoproj.io/sync-wave: "-1"
-this is: [ deliberately: broken yaml syntax
