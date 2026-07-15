@@ -20,8 +20,8 @@ Parameters:
     Description: Name of the network stack whose exports we !ImportValue.
   DbInstanceClass:
     Type: String
-    Default: db.t4g.small
-    AllowedValues: [db.t4g.small, db.t4g.medium, db.m6g.large]
+    Default: db.t4g.micro
+    AllowedValues: [db.t4g.micro, db.t4g.small, db.t4g.medium]
 
 Resources:
   DbMasterSecret:
