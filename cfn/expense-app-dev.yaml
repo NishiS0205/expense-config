@@ -87,7 +87,7 @@ Resources:
       VPCSecurityGroups:     [!Ref DbSecurityGroup]
       PubliclyAccessible:    false
       MultiAZ:               false
-      BackupRetentionPeriod: 7
+      BackupRetentionPeriod: 0
       DeletionProtection:    true
       MasterUsername:
         "Fn::Sub": "{{resolve:secretsmanager:expense/dev/db-master:SecretString:username}}"
