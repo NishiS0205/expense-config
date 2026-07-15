@@ -68,6 +68,10 @@ Resources:
             !ImportValue
               "Fn::Sub": "${NetworkStackName}-AppSgId"
           Description: Postgres from app SG only.
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 127.0.0.1/32
+          Description: Explicit no-egress rule (DB SG requires no outbound access).
       Tags:
         - {Key: Name, Value: !Sub "expense-${EnvName}-db-sg"}
 
