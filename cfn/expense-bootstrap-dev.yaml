@@ -1,0 +1,162 @@
+# cfn/expense-bootstrap-dev.yaml
+# TASK 1 baseline stack: bootstrap S3 bucket + IAM role for GitHub Actions
+# (OIDC) to deploy ALL future CFN stacks in this capstone.
+# Deploy order: this stack first, before any other.
+#
+# Deploy with the ChangeSet flow:
+#   aws cloudformation create-change-set \
+#     --stack-name expense-bootstrap-dev \
+#     --change-set-name initial --change-set-type CREATE \
+#     --capabilities CAPABILITY_NAMED_IAM \
+#     --template-body file://cfn/expense-bootstrap-dev.yaml \
+#     --parameters ParameterKey=EnvName,ParameterValue=dev \
+#     --region us-east-1
+AWSTemplateFormatVersion: "2010-09-09"
+Description: expense bootstrap stack -- artefact bucket + CFN deploy role.
+
+Parameters:
+  EnvName:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment environment.
+  RetentionDays:
+    Type: Number
+    Default: 30
+    MinValue: 7
+    MaxValue: 3650
+    Description: NoncurrentVersionExpiration in days (lifecycle rule).
+  GitHubOrg:
+    Type: String
+    Default: NishiS0205
+    Description: GitHub org that hosts the OIDC role's repo.
+  GitHubRepo:
+    Type: String
+    Default: expense-config
+    Description: GitOps config repo (W6 D2).
+
+Resources:
+  BootstrapBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "uptimecrew-expense-bootstrap-${EnvName}-${AWS::AccountId}"
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: alias/aws/s3
+            BucketKeyEnabled: true
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls:       true
+        BlockPublicPolicy:     true
+        IgnorePublicAcls:      true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-versions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: !Ref RetentionDays
+      Tags:
+        - {Key: Env,     Value: !Ref EnvName}
+        - {Key: Project, Value: expense}
+
+  BootstrapBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref BootstrapBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyNonTLS
+            Effect: Deny
+            Principal: "*"
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+              - s3:ListBucket
+            Resource:
+              - !GetAtt BootstrapBucket.Arn
+              - !Sub "${BootstrapBucket.Arn}/*"
+            Condition:
+              Bool:
+                "aws:SecureTransport": "false"
+
+  CfnDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: expense-api-cfn-deploy
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub "arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com"
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                "token.actions.githubusercontent.com:aud": sts.amazonaws.com
+              StringLike:
+                "token.actions.githubusercontent.com:sub":
+                  - !Sub "repo:${GitHubOrg}/${GitHubRepo}:ref:refs/heads/main"
+                  - !Sub "repo:${GitHubOrg}/${GitHubRepo}:pull_request"
+      Policies:
+        - PolicyName: cfn-deploy-narrow
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: CfnStackOps
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStackResources
+                  - cloudformation:GetTemplate
+                  - cloudformation:DetectStackDrift
+                  - cloudformation:DescribeStackDriftDetectionStatus
+                  - cloudformation:DescribeStackResourceDrifts
+                Resource:
+                  - !Sub "arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/expense-*"
+                  - !Sub "arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:changeSet/expense-*"
+              - Sid: CfnValidateTemplate
+                Effect: Allow
+                Action:
+                  - cloudformation:ValidateTemplate
+                Resource: "*"
+              - Sid: BootstrapBucketRead
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt BootstrapBucket.Arn
+                  - !Sub "${BootstrapBucket.Arn}/*"
+              - Sid: PassStackRoles
+                Effect: Allow
+                Action: iam:PassRole
+                Resource:
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/expense-*"
+      Tags:
+        - {Key: Env,     Value: !Ref EnvName}
+        - {Key: Project, Value: expense}
+
+Outputs:
+  BootstrapBucketName:
+    Description: Globally-unique bootstrap bucket name.
+    Value: !Ref BootstrapBucket
+    Export: {Name: !Sub "${AWS::StackName}-BucketName"}
+  BootstrapBucketArn:
+    Value: !GetAtt BootstrapBucket.Arn
+    Export: {Name: !Sub "${AWS::StackName}-BucketArn"}
+  CfnDeployRoleArn:
+    Description: ARN that GitHub Actions assumes via OIDC to deploy CFN stacks.
+    Value: !GetAtt CfnDeployRole.Arn
+    Export: {Name: !Sub "${AWS::StackName}-CfnDeployRoleArn"}
