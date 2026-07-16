@@ -1,0 +1,67 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Hardened S3 bucket for SAM (lambda/template.yaml) build artefacts —
+  full public access block, SSE-S3 default encryption, deny-non-TLS
+  bucket policy, and a lifecycle rule to age out old artefacts.
+
+Parameters:
+  pEnvironment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+
+  pArtifactExpirationDays:
+    Type: Number
+    Default: 90
+    Description: Days after which SAM build artefacts are expired.
+
+Resources:
+  SamArtifactBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "expense-${pEnvironment}-sam-artifacts-${AWS::AccountId}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireSamArtifacts
+            Status: Enabled
+            ExpirationInDays: !Ref pArtifactExpirationDays
+          - Id: AbortIncompleteMultipartUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+      Tags:
+        - { Key: Name, Value: !Sub "expense-${pEnvironment}-sam-artifacts" }
+
+  SamArtifactBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref SamArtifactBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyNonTls
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt SamArtifactBucket.Arn
+              - !Sub "${SamArtifactBucket.Arn}/*"
+            Condition:
+              Bool: { "aws:SecureTransport": "false" }
+
+Outputs:
+  BucketName:
+    Value: !Ref SamArtifactBucket
+    Export: { Name: !Sub "expense-${pEnvironment}-sam-artifact-bucket" }
+  BucketArn:
+    Value: !GetAtt SamArtifactBucket.Arn

@@ -1,0 +1,142 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  expense-api EKS cluster — control plane, one managed node group in the
+  private-app subnets, an IAM OIDC provider for IRSA, and control-plane
+  logging to CloudWatch. Imports networking from expense-<env>-vpc.yaml.
+
+  NOTE: no ServiceAccount in manifests/ (W5D3) currently carries an
+  eks.amazonaws.com/role-arn annotation, so this stack provisions the
+  OIDC provider only and does not mint any app-specific IRSA role. Add
+  an AWS::IAM::Role with the standard IRSA trust policy here once a
+  ServiceAccount is annotated.
+
+Parameters:
+  pEnvironment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+
+  pKubernetesVersion:
+    Type: String
+    Default: "1.30"
+
+  pNodeInstanceType:
+    Type: String
+    Default: t3.medium
+
+  pNodeDesiredSize:
+    Type: Number
+    Default: 2
+  pNodeMinSize:
+    Type: Number
+    Default: 1
+  pNodeMaxSize:
+    Type: Number
+    Default: 3
+
+Resources:
+
+  # ------------------------------------------------------ Cluster role ---
+  ClusterRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "expense-${pEnvironment}-eks-cluster-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: eks.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
+
+  ClusterLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/eks/expense-${pEnvironment}/cluster"
+      RetentionInDays: 90
+
+  # ----------------------------------------------------------- Cluster ---
+  Cluster:
+    Type: AWS::EKS::Cluster
+    DependsOn: ClusterLogGroup
+    Properties:
+      Name: !Sub "expense-${pEnvironment}"
+      Version: !Ref pKubernetesVersion
+      RoleArn: !GetAtt ClusterRole.Arn
+      ResourcesVpcConfig:
+        EndpointPrivateAccess: true
+        EndpointPublicAccess: true
+        SubnetIds: !Split
+          - ","
+          - !Join
+            - ","
+            - - !ImportValue { "Fn::Sub": "expense-network-${pEnvironment}-PublicSubnets" }
+              - !ImportValue { "Fn::Sub": "expense-network-${pEnvironment}-PrivateSubnets" }
+      Logging:
+        ClusterLogging:
+          EnabledTypes:
+            - Type: api
+            - Type: audit
+            - Type: authenticator
+
+  # ------------------------------------------------------- OIDC for IRSA ---
+  ClusterOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      Url: !GetAtt Cluster.OpenIdConnectIssuerUrl
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        - 9e99a48a9960b14926bb7f3b02e22da2b0ab7280
+
+  # --------------------------------------------------------- Node role ---
+  NodeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "expense-${pEnvironment}-eks-node-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
+        - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+
+  # ---------------------------------------------------- Managed nodegroup ---
+  NodeGroup:
+    Type: AWS::EKS::Nodegroup
+    Properties:
+      NodegroupName: !Sub "expense-${pEnvironment}-nodes"
+      ClusterName: !Ref Cluster
+      NodeRole: !GetAtt NodeRole.Arn
+      AmiType: AL2023_x86_64_STANDARD
+      DiskSize: 20
+      InstanceTypes: [!Ref pNodeInstanceType]
+      ScalingConfig:
+        DesiredSize: !Ref pNodeDesiredSize
+        MinSize: !Ref pNodeMinSize
+        MaxSize: !Ref pNodeMaxSize
+      Subnets: !Split
+        - ","
+        - !ImportValue { "Fn::Sub": "expense-network-${pEnvironment}-PrivateSubnets" }
+      Tags:
+        app.kubernetes.io/part-of: expense
+
+Outputs:
+  ClusterName:
+    Value: !Ref Cluster
+  ClusterArn:
+    Value: !GetAtt Cluster.Arn
+    Export: { Name: !Sub "expense-${pEnvironment}-eks-cluster-arn" }
+  ClusterSecurityGroupId:
+    Value: !GetAtt Cluster.ClusterSecurityGroupId
+  OidcProviderArn:
+    Value: !Ref ClusterOidcProvider
+    Export: { Name: !Sub "expense-${pEnvironment}-eks-oidc-provider-arn" }
+  OidcIssuerUrl:
+    Value: !GetAtt Cluster.OpenIdConnectIssuerUrl
