@@ -22,7 +22,7 @@ Parameters:
 
   pNodeInstanceType:
     Type: String
-    Default: t3.medium
+    Default: t3.small
 
   pNodeDesiredSize:
     Type: Number
@@ -140,3 +140,8 @@ Outputs:
     Export: { Name: !Sub "expense-${pEnvironment}-eks-oidc-provider-arn" }
   OidcIssuerUrl:
     Value: !GetAtt Cluster.OpenIdConnectIssuerUrl
+  OidcIssuerHost:
+    # Stripped of the https:// scheme -- IRSA trust-policy condition
+    # keys use "<host>:sub", not the full URL.
+    Value: !Select [1, !Split ["//", !GetAtt Cluster.OpenIdConnectIssuerUrl]]
+    Export: { Name: !Sub "expense-${pEnvironment}-eks-oidc-issuer-host" }

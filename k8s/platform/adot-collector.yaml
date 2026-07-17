@@ -1,0 +1,61 @@
+# k8s/platform/adot-collector.yaml
+# TASK 1 (W6D5) ADOT collector.
+#
+# Deviation from the reference: the reference dual-exports to both
+# the W5D5 Tempo endpoint (tempo-distributor.platform-svc:4318) and
+# X-Ray. That Tempo endpoint doesn't exist on this real EKS cluster
+# -- W5D5's Tempo work was done against local k3d, not this cluster.
+# Rather than point the collector at a nonexistent endpoint (which
+# would just silently fail/retry forever), the otlphttp/tempo
+# exporter is omitted here, X-Ray-only, with this comment flagging
+# the gap explicitly rather than papering over it.
+---
+apiVersion: opentelemetry.io/v1alpha1
+kind: OpenTelemetryCollector
+metadata:
+  name: adot-collector
+  namespace: platform-svc
+spec:
+  image: public.ecr.aws/aws-observability/aws-otel-collector:latest
+  serviceAccount: adot-collector-sa
+  mode: deployment
+  replicas: 2
+  config: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+    processors:
+      batch:
+        timeout: 5s
+      attributes/sanitise:
+        actions:
+          - key: http.request.body
+            action: delete
+
+    exporters:
+      awsxray:
+        region: us-east-1
+        indexed_attributes:
+          - service
+          - tenant
+          - feature
+
+    service:
+      pipelines:
+        traces:
+          receivers:  [otlp]
+          processors: [batch, attributes/sanitise]
+          exporters:  [awsxray]
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: adot-collector-sa
+  namespace: platform-svc
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::475790160484:role/adot-collector-xray-write
