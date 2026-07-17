@@ -1,0 +1,306 @@
+# cfn/expense-cost-dev.yaml
+# TASK 1 cost stack: Bedrock IRSA, SNS, per-request cost alarm, monthly
+# budget + 100%-actual BudgetsAction attaching an explicit-deny policy,
+# and a hardened CUR-destination S3 bucket.
+#
+# Deviations from the assignment reference, with rationale:
+#   - Imports expense-${EnvName}-eks-oidc-provider-arn/-issuer-host from
+#     THIS repo's own cfn/expense-eks.yaml (deployed as expense-eks-dev),
+#     not "expense-app-dev-EksOidcProviderArn" as the reference assumes.
+#     No EKS cluster existed anywhere in this account before today.
+#   - BedrockInvokeRole's trust policy is written as a raw JSON string
+#     under Fn::Sub (two-argument form), not YAML mapping syntax. A
+#     StringEquals condition needs a DYNAMIC KEY (built from the OIDC
+#     issuer host), and CloudFormation's intrinsic functions cannot
+#     build a YAML mapping key -- only a value. Writing the whole
+#     policy as a Fn::Sub'd JSON string is the standard, documented
+#     workaround (confirmed against AWS's own IRSA CFN examples).
+#   - CostPerRequestAlarm's metric Dimensions include tenant=default
+#     (not just service+feature as the reference shows). The W6D4
+#     Task 2 EmfEmitter this alarm reads from publishes THREE
+#     dimensions (service, tenant, feature) -- CloudWatch metric
+#     identity is the exact dimension set, so an alarm querying only
+#     two of the three dimensions would never match any published
+#     datapoint and would sit at INSUFFICIENT_DATA forever.
+#
+# Deploy:
+#   aws cloudformation deploy \
+#     --stack-name expense-cost-dev \
+#     --template-file cfn/expense-cost-dev.yaml \
+#     --capabilities CAPABILITY_NAMED_IAM \
+#     --parameter-overrides EnvName=dev
+AWSTemplateFormatVersion: "2010-09-09"
+Description: expense cost stack -- Bedrock IRSA, SNS, alarm, budget, CUR bucket.
+
+Parameters:
+  EnvName:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment environment.
+  MonthlyBudgetUsd:
+    Type: Number
+    Default: 2500
+    MinValue: 100
+    MaxValue: 100000
+    Description: Monthly Bedrock spend cap, USD (cost-budget).
+  BedrockModelId:
+    Type: String
+    Default: anthropic.claude-3-5-haiku-20241022-v1:0
+    Description: Foundation model ARN suffix; pinned for explicit IAM scope.
+
+Resources:
+  CostAlarmsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: expense-cost-alarms-dev
+      KmsMasterKeyId: alias/aws/sns
+      Tags:
+        - {Key: service, Value: expense}
+        - {Key: env,     Value: !Ref EnvName}
+        - {Key: tenant,  Value: shared}
+        - {Key: feature, Value: categorize-expense}
+
+  # StringEquals (not StringLike): the IRSA sub claim is a single
+  # literal value. Any wildcard here is an EKS-cluster-wide
+  # privilege-escalation footgun -- see W6D4 Task 1 hint.
+  BedrockInvokeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: expense-bedrock-invoke
+      AssumeRolePolicyDocument:
+        Fn::Sub:
+          - |
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": { "Federated": "${ProviderArn}" },
+                  "Action": "sts:AssumeRoleWithWebIdentity",
+                  "Condition": {
+                    "StringEquals": {
+                      "${IssuerHost}:sub": "system:serviceaccount:expense-dev:expense-svc"
+                    }
+                  }
+                }
+              ]
+            }
+          - IssuerHost:
+              Fn::ImportValue: !Sub "expense-${EnvName}-eks-oidc-issuer-host"
+            ProviderArn:
+              Fn::ImportValue: !Sub "expense-${EnvName}-eks-oidc-provider-arn"
+      Policies:
+        - PolicyName: bedrock-invoke-narrow
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: BedrockInvokeOneModel
+                Effect: Allow
+                Action: bedrock:InvokeModel
+                Resource:
+                  - !Sub "arn:aws:bedrock:${AWS::Region}::foundation-model/${BedrockModelId}"
+      Tags:
+        - {Key: service, Value: expense}
+        - {Key: env,     Value: !Ref EnvName}
+        - {Key: tenant,  Value: shared}
+        - {Key: feature, Value: categorize-expense}
+
+  BedrockDenyOnBudget:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: ExpenseBedrockDenyPolicy
+      Description: Explicit-deny Bedrock invoke; attached by BudgetsAction at 100% actual.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyBedrockInvokeOnBudgetCap
+            Effect: Deny
+            Action: bedrock:InvokeModel
+            Resource:
+              - !Sub "arn:aws:bedrock:${AWS::Region}::foundation-model/${BedrockModelId}"
+
+  CostPerRequestAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: expense/cost-per-request-dev
+      AlarmDescription: 15-minute moving average CostUsd > 0.005 USD/call.
+      ActionsEnabled: true
+      AlarmActions: [ !Ref CostAlarmsTopic ]
+      OKActions:    [ !Ref CostAlarmsTopic ]
+      InsufficientDataActions: [ !Ref CostAlarmsTopic ]
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 3
+      Threshold: 0.005
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: breaching
+      Metrics:
+        - Id: m1
+          # m1 already applies Stat: Average over a 300s Period, giving a
+          # proper time series of 5-minute averages -- exactly what an
+          # alarm needs to evaluate against EvaluationPeriods. Wrapping
+          # it in AVG(m1) (as the assignment reference does) is invalid:
+          # AVG() is a reducing function that collapses an entire time
+          # series into a single scalar, and CloudWatch alarms reject a
+          # scalar-returning expression with "must be TimeSeries or
+          # Array[TimeSeries]". Alarming directly on m1 is both correct
+          # and simpler.
+          Label: "5m average CostUsd"
+          MetricStat:
+            Metric:
+              Namespace: "acme/llmproxy"
+              MetricName: "CostUsd"
+              Dimensions:
+                - {Name: service, Value: expense}
+                - {Name: tenant,  Value: default}
+                - {Name: feature, Value: categorize-expense}
+            Period: 300
+            Stat: Average
+          ReturnData: true
+
+  BudgetActionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "expense-budget-action-${EnvName}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: budgets.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: attach-deny-policy-narrow
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: AttachDenyToBedrockRole
+                Effect: Allow
+                Action:
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                Resource:
+                  - !GetAtt BedrockInvokeRole.Arn
+                Condition:
+                  ArnEquals:
+                    "iam:PolicyARN": !Ref BedrockDenyOnBudget
+
+  MonthlyBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: expense-monthly-cost-dev
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: !Ref MonthlyBudgetUsd
+          Unit: USD
+        CostFilters:
+          TagKeyValue:
+            - "user:service$expense"
+            - !Sub "user:env$${EnvName}"
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: FORECASTED
+            ComparisonOperator: GREATER_THAN
+            Threshold: 80
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: SNS
+              Address: !Ref CostAlarmsTopic
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: SNS
+              Address: !Ref CostAlarmsTopic
+
+  BudgetActionAttachDeny:
+    Type: AWS::Budgets::BudgetsAction
+    Properties:
+      BudgetName: !Ref MonthlyBudget
+      NotificationType: ACTUAL
+      ActionType: APPLY_IAM_POLICY
+      ApprovalModel: AUTOMATIC
+      ExecutionRoleArn: !GetAtt BudgetActionRole.Arn
+      ActionThreshold:
+        Type: PERCENTAGE
+        Value: 100
+      Definition:
+        IamActionDefinition:
+          PolicyArn: !Ref BedrockDenyOnBudget
+          Roles:
+            - !Ref BedrockInvokeRole
+      Subscribers:
+        - Type: SNS
+          Address: !Ref CostAlarmsTopic
+
+  CurBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "uptimecrew-expense-cur-dev-${AWS::AccountId}"
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: alias/aws/s3
+            BucketKeyEnabled: true
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls:       true
+        BlockPublicPolicy:     true
+        IgnorePublicAcls:      true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: ia-after-90-days
+            Status: Enabled
+            Transitions:
+              - StorageClass: STANDARD_IA
+                TransitionInDays: 90
+      Tags:
+        - {Key: service, Value: expense}
+        - {Key: env,     Value: !Ref EnvName}
+        - {Key: tenant,  Value: shared}
+        - {Key: feature, Value: categorize-expense}
+
+  CurBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref CurBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyNonTLS
+            Effect: Deny
+            Principal: "*"
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+              - s3:ListBucket
+            Resource:
+              - !GetAtt CurBucket.Arn
+              - !Sub "${CurBucket.Arn}/*"
+            Condition:
+              Bool:
+                "aws:SecureTransport": "false"
+
+Outputs:
+  BedrockInvokeRoleArn:
+    Description: IRSA role ARN the EKS service account annotates.
+    Value: !GetAtt BedrockInvokeRole.Arn
+    Export: {Name: !Sub "${AWS::StackName}-BedrockInvokeRoleArn"}
+  CostAlarmsTopicArn:
+    Description: SNS topic ARN; Slack + PagerDuty subscribers live in their own CFN.
+    Value: !Ref CostAlarmsTopic
+    Export: {Name: !Sub "${AWS::StackName}-CostAlarmsTopicArn"}
+  MonthlyBudgetName:
+    Value: !Ref MonthlyBudget
+    Export: {Name: !Sub "${AWS::StackName}-MonthlyBudgetName"}
+  CurBucketName:
+    Value: !Ref CurBucket
+    Export: {Name: !Sub "${AWS::StackName}-CurBucketName"}
