@@ -1,0 +1,35 @@
+# k8s/platform/expense-nodeclass.yaml
+# TASK 2 (W6D5): EC2NodeClass -- referenced by NodePool's
+# nodeClassRef: name: default, but never actually defined in the
+# assignment's reference snippet. Adding it here since nothing works
+# without it.
+#
+# Selects by the real tags already on our W6D3 network stack's
+# resources (expense-dev-private-a/b/c subnets, expense-dev-app-sg
+# security group) rather than requiring a separate discovery-tag
+# pass over existing infrastructure.
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: default
+spec:
+  amiFamily: AL2023
+  amiSelectorTerms:
+    - alias: al2023@latest
+  role: KarpenterNodeRole-expense-dev
+  subnetSelectorTerms:
+    - tags:
+        Name: "expense-dev-private-*"
+  securityGroupSelectorTerms:
+    # EKS cluster security group -- required for nodes to communicate
+    # with the control plane. Managed node groups get this wired
+    # automatically; Karpenter-provisioned nodes on a separate custom
+    # SG do not, which caused repeated silent registration failures
+    # (bootstrap completed cleanly per instance console log, kubelet
+    # started, but the node never appeared in `kubectl get nodes` and
+    # Karpenter eventually terminated it on its own registration
+    # timeout -- confirmed 3x in a row with identical symptoms before
+    # finding this).
+    - id: sg-041c1cc712f500007
+    - tags:
+        Name: "expense-dev-app-sg"

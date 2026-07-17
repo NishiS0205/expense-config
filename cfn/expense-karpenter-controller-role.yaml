@@ -1,0 +1,65 @@
+# cfn/expense-karpenter-controller-role.yaml
+# TASK 2 (W6D5): IRSA role for the Karpenter controller's own
+# ServiceAccount (kube-system:karpenter, matching the Helm chart's
+# default namespace/name). Attaches the 6 official controller
+# policies created by karpenter-bootstrap.yaml (downloaded verbatim
+# from AWS's own repo, not hand-transcribed) -- the official
+# cloudformation.yaml itself doesn't create this IRSA role, since
+# it's designed to be paired with eksctl, which handles that step
+# separately. This stack fills that gap for our non-eksctl setup.
+AWSTemplateFormatVersion: "2010-09-09"
+Description: IRSA role for the Karpenter controller ServiceAccount.
+
+Parameters:
+  EnvName:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+  ClusterName:
+    Type: String
+    Default: expense-dev
+
+Resources:
+  KarpenterControllerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "karpenter-controller-${ClusterName}"
+      AssumeRolePolicyDocument:
+        Fn::Sub:
+          - |
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": { "Federated": "${ProviderArn}" },
+                  "Action": "sts:AssumeRoleWithWebIdentity",
+                  "Condition": {
+                    "StringEquals": {
+                      "${IssuerHost}:sub": "system:serviceaccount:kube-system:karpenter"
+                    }
+                  }
+                }
+              ]
+            }
+          - IssuerHost:
+              Fn::ImportValue: !Sub "expense-${EnvName}-eks-oidc-issuer-host"
+            ProviderArn:
+              Fn::ImportValue: !Sub "expense-${EnvName}-eks-oidc-provider-arn"
+      ManagedPolicyArns:
+        - !Sub "arn:aws:iam::${AWS::AccountId}:policy/KarpenterControllerNodeLifecyclePolicy-${ClusterName}"
+        - !Sub "arn:aws:iam::${AWS::AccountId}:policy/KarpenterControllerIAMIntegrationPolicy-${ClusterName}"
+        - !Sub "arn:aws:iam::${AWS::AccountId}:policy/KarpenterControllerEKSIntegrationPolicy-${ClusterName}"
+        - !Sub "arn:aws:iam::${AWS::AccountId}:policy/KarpenterControllerInterruptionPolicy-${ClusterName}"
+        - !Sub "arn:aws:iam::${AWS::AccountId}:policy/KarpenterControllerZonalShiftPolicy-${ClusterName}"
+        - !Sub "arn:aws:iam::${AWS::AccountId}:policy/KarpenterControllerResourceDiscoveryPolicy-${ClusterName}"
+      Tags:
+        - {Key: service, Value: expense}
+        - {Key: env,     Value: !Ref EnvName}
+        - {Key: tenant,  Value: shared}
+        - {Key: feature, Value: categorize-expense}
+
+Outputs:
+  ControllerRoleArn:
+    Value: !GetAtt KarpenterControllerRole.Arn
+    Export: {Name: !Sub "${AWS::StackName}-ControllerRoleArn"}

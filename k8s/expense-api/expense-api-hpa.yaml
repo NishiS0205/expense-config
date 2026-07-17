@@ -1,0 +1,50 @@
+# k8s/expense-api/expense-api-hpa.yaml
+# TASK 2 (W6D5) SLO-derived HPA, scaling on the custom Prometheus
+# metric expense_inflight_requests.
+#
+# KNOWN GAP: this metric does not exist anywhere in the actual
+# expense-api Java code (confirmed via grep across src/main/java/
+# before writing any of this session's infra) -- no Micrometer gauge
+# named expense_inflight_requests is ever registered. The full
+# metrics pipeline behind this HPA IS real and verified working:
+# kube-prometheus-stack scraping real nodes/pods, prometheus-adapter
+# bridging Prometheus queries into the real custom.metrics.k8s.io API
+# (confirmed live via `kubectl get --raw
+# /apis/custom.metrics.k8s.io/v1beta1`, correctly returning an empty
+# resource list since nothing emits this metric yet). This HPA will
+# apply cleanly and show "unable to get metric" until the app itself
+# is instrumented with this gauge -- that's application-code work,
+# out of scope for W6D5's Kubernetes-manifest focus.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: expense-api-hpa
+  namespace: expense-dev
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: expense-api
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Pods
+      pods:
+        metric:
+          name: expense_inflight_requests
+        target:
+          type: AverageValue
+          averageValue: "20"
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 25
+          periodSeconds: 60

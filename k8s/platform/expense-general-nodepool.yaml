@@ -1,0 +1,38 @@
+# k8s/platform/expense-general-nodepool.yaml
+# Untainted, general-purpose NodePool. Added when the fixed 2-node
+# managed nodegroup (t3.small, chosen for AWS Free Tier eligibility)
+# ran out of pod slots (t3.small's ENI-based max-pods ceiling is
+# ~11) once cert-manager + KEDA + Karpenter + ADOT + Prometheus were
+# all running simultaneously -- confirmed via `kubectl describe pod`
+# showing "Too many pods", not a CPU/memory shortage. Rather than
+# resize the fixed nodegroup (real ongoing cost, drifts from the
+# deliberate Free Tier choice), this lets Karpenter provision
+# on-demand burst capacity for anything that doesn't need the
+# expense-mixed NodePool's workload=expense-api taint/toleration.
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: expense-general
+spec:
+  template:
+    spec:
+      requirements:
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["on-demand"]
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values: ["t3.small", "t3.medium"]
+        - key: topology.kubernetes.io/zone
+          operator: In
+          values: ["us-east-1a", "us-east-1b", "us-east-1c"]
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: default
+  disruption:
+    consolidationPolicy: WhenEmptyOrUnderutilized
+    consolidateAfter: 300s
+  limits:
+    cpu: "20"
+    memory: 40Gi
