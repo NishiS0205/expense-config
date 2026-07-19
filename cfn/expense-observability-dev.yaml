@@ -1,0 +1,148 @@
+# cfn/expense-observability-dev.yaml
+# TASK 1 (W6D5) observability stack: X-Ray sampling rule, deployed
+# through CFN (never the X-Ray console -- same IaC discipline as W6D3).
+#
+# Also includes two IRSA roles the task's manifests (ADOT collector,
+# KEDA ScaledObject) reference by role ARN but that no CFN template
+# actually creates elsewhere -- adding them here since this is the
+# only stack in the deploy order positioned to carry those ARNs into
+# the manifests (per the task's own "apply order" note: "the ADOT
+# collector [needs] the role ARN that the CFN output carries").
+AWSTemplateFormatVersion: "2010-09-09"
+Description: expense observability stack -- X-Ray sampling rule + IRSA roles.
+
+Parameters:
+  EnvName:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+
+Resources:
+  expenseSamplingRule:
+    Type: AWS::XRay::SamplingRule
+    Properties:
+      SamplingRule:
+        RuleName: expense-api-default
+        Priority: 1000
+        ReservoirSize: 10
+        FixedRate: 0.05
+        ServiceName: expense-api
+        ServiceType: "*"
+        Host: "*"
+        HTTPMethod: "*"
+        URLPath: "*"
+        ResourceARN: "*"
+        Version: 1
+      Tags:
+        - {Key: service, Value: expense}
+        - {Key: env,     Value: !Ref EnvName}
+        - {Key: tenant,  Value: shared}
+        - {Key: feature, Value: categorize-expense}
+
+  # IRSA role for the ADOT collector's ServiceAccount
+  # (platform-svc:adot-collector-sa). X-Ray uses ingestion endpoints,
+  # not per-resource ARNs, hence Resource: "*".
+  AdotCollectorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: adot-collector-xray-write
+      AssumeRolePolicyDocument:
+        Fn::Sub:
+          - |
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": { "Federated": "${ProviderArn}" },
+                  "Action": "sts:AssumeRoleWithWebIdentity",
+                  "Condition": {
+                    "StringEquals": {
+                      "${IssuerHost}:sub": "system:serviceaccount:platform-svc:adot-collector-sa"
+                    }
+                  }
+                }
+              ]
+            }
+          - IssuerHost:
+              Fn::ImportValue: !Sub "expense-${EnvName}-eks-oidc-issuer-host"
+            ProviderArn:
+              Fn::ImportValue: !Sub "expense-${EnvName}-eks-oidc-provider-arn"
+      Policies:
+        - PolicyName: xray-ingest
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: XRayIngest
+                Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:GetSamplingRules
+                Resource: "*"
+      Tags:
+        - {Key: service, Value: expense}
+        - {Key: env,     Value: !Ref EnvName}
+        - {Key: tenant,  Value: shared}
+        - {Key: feature, Value: categorize-expense}
+
+  # IRSA role for KEDA's OWN operator ServiceAccount (keda:keda-operator)
+  # -- identityOwner: operator in the ScaledObject's TriggerAuthentication
+  # means this ONE role is used to read SQS for every ScaledObject, not
+  # a per-workload role. Confirmed the real SA name via `kubectl get sa
+  # -n keda` before writing this (Helm-installed KEDA creates
+  # `keda-operator`, matching this trust policy).
+  KedaOperatorSqsReadRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: keda-operator-sqs-read
+      AssumeRolePolicyDocument:
+        Fn::Sub:
+          - |
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": { "Federated": "${ProviderArn}" },
+                  "Action": "sts:AssumeRoleWithWebIdentity",
+                  "Condition": {
+                    "StringEquals": {
+                      "${IssuerHost}:sub": "system:serviceaccount:keda:keda-operator"
+                    }
+                  }
+                }
+              ]
+            }
+          - IssuerHost:
+              Fn::ImportValue: !Sub "expense-${EnvName}-eks-oidc-issuer-host"
+            ProviderArn:
+              Fn::ImportValue: !Sub "expense-${EnvName}-eks-oidc-provider-arn"
+      Policies:
+        - PolicyName: sqs-read-ingest-queue
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadIngestQueue
+                Effect: Allow
+                Action:
+                  - sqs:GetQueueAttributes
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                Resource:
+                  - !Sub "arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:expense-ingest-dev"
+      Tags:
+        - {Key: service, Value: expense}
+        - {Key: env,     Value: !Ref EnvName}
+        - {Key: tenant,  Value: shared}
+        - {Key: feature, Value: categorize-expense}
+
+Outputs:
+  SamplingRuleArn:
+    Value: !GetAtt expenseSamplingRule.RuleARN
+    Export: {Name: !Sub "${AWS::StackName}-SamplingRuleArn"}
+  AdotCollectorRoleArn:
+    Value: !GetAtt AdotCollectorRole.Arn
+    Export: {Name: !Sub "${AWS::StackName}-AdotCollectorRoleArn"}
+  KedaOperatorSqsReadRoleArn:
+    Value: !GetAtt KedaOperatorSqsReadRole.Arn
+    Export: {Name: !Sub "${AWS::StackName}-KedaOperatorSqsReadRoleArn"}

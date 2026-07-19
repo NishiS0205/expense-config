@@ -1,0 +1,43 @@
+# k8s/expense-api/expense-worker-scaledobject.yaml
+# TASK 1 (W6D5): KEDA ScaledObject + TriggerAuthentication.
+# Binds expense-api-worker to the real expense-ingest-dev SQS queue.
+#
+# Credentials live in TriggerAuthentication (NOT inlined in the
+# ScaledObject metadata -- that would leak them into the manifest).
+# podIdentity.provider: aws + identityOwner: keda means KEDA
+# reuses the operator's own IRSA-bound role (keda-operator-sqs-read,
+# annotated onto the keda:keda-operator ServiceAccount, confirmed via
+# `kubectl get sa -n keda` before writing the CFN trust policy) to
+# read SQS -- the workload pod itself never needs SQS permissions.
+---
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: expense-api-aws-auth
+  namespace: expense-dev
+spec:
+  podIdentity:
+    provider: aws
+    identityOwner: keda
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: expense-worker-scaledobject
+  namespace: expense-dev
+spec:
+  scaleTargetRef:
+    name: expense-api-worker
+  minReplicaCount: 0
+  maxReplicaCount: 20
+  pollingInterval: 15
+  cooldownPeriod: 300
+  triggers:
+    - type: aws-sqs-queue
+      metadata:
+        queueURL: https://sqs.us-east-1.amazonaws.com/475790160484/expense-ingest-dev
+        queueLength: "10"
+        awsRegion: us-east-1
+        identityOwner: keda
+      authenticationRef:
+        name: expense-api-aws-auth

@@ -1,0 +1,41 @@
+# k8s/expense-api/expense-api-worker.deployment.yaml
+# TASK 1 (W6D5) worker Deployment for the KEDA ScaledObject to target.
+#
+# KNOWN GAP: no expense-api-worker concept exists anywhere in this
+# codebase (confirmed via grep across manifests/ and k8s/ before
+# writing this) -- this is a minimal stub reusing the existing
+# expense-api image so KEDA has a real Deployment to scale, NOT a
+# real SQS-consuming worker process. The image tag
+# (uptimecrew/expense-api:0.2.0-obs) is a local-k3d-only image, never
+# pushed to a registry reachable from this real EKS cluster -- the
+# pod is expected to sit in ImagePullBackOff. This still exercises
+# KEDA's actual mechanism correctly: KEDA manages the Deployment's
+# replica COUNT based on the SQS trigger regardless of whether pods
+# successfully start, so scale-up/scale-down behavior is genuinely
+# observable via `kubectl get deployment` even with unschedulable
+# pods. A real queue-consuming worker binary is out of scope for
+# W6D5 and would need its own application-code work.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: expense-api-worker
+  namespace: expense-dev
+  labels:
+    app: expense-api-worker
+spec:
+  replicas: 0
+  selector:
+    matchLabels:
+      app: expense-api-worker
+  template:
+    metadata:
+      labels:
+        app: expense-api-worker
+    spec:
+      containers:
+        - name: expense-api-worker
+          image: uptimecrew/expense-api:0.2.0-obs
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits:   {cpu: 500m, memory: 512Mi}

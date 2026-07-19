@@ -1,0 +1,54 @@
+# k8s/platform/expense-mixed.yaml
+# TASK 2 (W6D5): Karpenter NodePool with Spot + On-Demand mix plus a
+# PodDisruptionBudget protecting the expense-api floor.
+#
+# Deviation from the reference: nodeClassRef requires group + kind
+# fields in this Karpenter version (v1 API), not just name -- the
+# reference's snippet only showed name, which fails CRD validation.
+# Confirmed against real-world Karpenter v1 examples before writing.
+---
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: expense-mixed
+spec:
+  template:
+    metadata:
+      labels:
+        workload: expense-api
+    spec:
+      requirements:
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["spot", "on-demand"]
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values: ["m5.large", "m5.xlarge", "m5a.large", "m6i.large"]
+        - key: topology.kubernetes.io/zone
+          operator: In
+          values: ["us-east-1a", "us-east-1b", "us-east-1c"]
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: default
+      taints:
+        - key: workload
+          value: expense-api
+          effect: NoSchedule
+  disruption:
+    consolidationPolicy: WhenEmptyOrUnderutilized
+    consolidateAfter: 600s
+  limits:
+    cpu: "200"
+    memory: 400Gi
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: expense-api-pdb
+  namespace: expense-dev
+spec:
+  maxUnavailable: 25%
+  selector:
+    matchLabels:
+      app: expense-api
